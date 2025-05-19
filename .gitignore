@@ -1,0 +1,4 @@
+.vagrant/
+# если появятся логи
+*.log
+test.txt
