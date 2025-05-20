@@ -1,0 +1,112 @@
+---
+- name: "Практика 5: Автоматизация конфигурирования ВМ с помощью Ansible Local"
+  hosts: localhost
+  become: true
+
+  vars:
+    htop_version: "3.0.5-7"
+    service_port: "8081"
+    conf_path: "/etc/some_service.conf"
+    conf_backup_path: "/etc/some_service.conf.bak.{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}"
+    repos:
+      - { name: "aFraud", repo: "https://github.com/gla1z/aFraud.git" }
+      - { name: "Text-to-PPT-Generation-Streamlit-App", repo: "https://github.com/AIAnytime/Text-to-PPT-Generation-Streamlit-App.git" }
+      - { name: "fast-writer", repo: "https://github.com/Kirlovon/fast-writer.git" }
+
+  tasks:
+    - name: "Создать файл с временной меткой пользователя"
+      file:
+        path: /home/vagrant/timestamp.txt
+        state: touch
+
+    - name: "Добавить текущую дату и пользователя в timestamp.txt"
+      lineinfile:
+        path: /home/vagrant/timestamp.txt
+        line: "{{ lookup('pipe','date +\"%Y-%m-%d %H:%M:%S\"') }} {{ ansible_user_id }}"
+
+    - name: "Установить пакет htop (версия {{ htop_version }})"
+      apt:
+        name: "htop={{ htop_version }}"
+        state: present
+        update_cache: yes
+
+    - name: "Установить git"
+      apt:
+        name: git
+        state: present
+
+    - name: "Установить pip и venv для Python 3"
+      apt:
+        name:
+          - python3-pip
+          - python3-venv
+        state: present
+
+    - name: "Добавить основной репозиторий Debian Bullseye"
+      apt_repository:
+        repo: "deb http://deb.debian.org/debian bullseye main"
+        state: present
+
+    - name: "Создать конфиг /etc/some_service.conf если не существует"
+      file:
+        path: "{{ conf_path }}"
+        state: touch
+        mode: '0644'
+
+    - name: "Обновить порт в конфиге some_service.conf"
+      replace:
+        path: "{{ conf_path }}"
+        regexp: '^port=.*'
+        replace: "port={{ service_port }}"
+
+    - name: "Сделать резервную копию конфига с меткой времени"
+      copy:
+        src: "{{ conf_path }}"
+        dest: "{{ conf_backup_path }}"
+        remote_src: yes
+        mode: '0644'
+
+    - name: "Деплой шаблона some_service.conf из Jinja2"
+      template:
+        src: templates/config.j2
+        dest: "{{ conf_path }}"
+        mode: '0644'
+
+    - name: "Скачать initrd с Debian-сервера"
+      get_url:
+        url: "https://ftp.debian.org/debian/dists/bullseye/main/installer-amd64/current/images/netboot/debian-installer/amd64/initrd.gz"
+        dest: /opt/initrd.gz
+        mode: '0644'
+        force: no
+
+    - name: "Добавить крон-задачу для резервного копирования"
+      cron:
+        name: "Backup data"
+        minute: "0"
+        hour: "3"
+        job: "/usr/bin/rsync -a /opt/data /backup/data"
+
+    - name: "Клонировать учебные репозитории"
+      git:
+        repo: "{{ item.repo }}"
+        dest: "/home/vagrant/projects/{{ item.name }}"
+        version: HEAD
+      loop: "{{ repos }}"
+
+    - name: "Установить зависимости из requirements.txt, если файл существует"
+      include_tasks: tasks/requirements_install.yml
+      loop: "{{ repos }}"
+      loop_control:
+        loop_var: repo_item
+
+    - name: "Перезапустить демон cron для применения изменений"
+      service:
+        name: cron
+        state: restarted
+
+    - name: "Показать время рестарта cron"
+      command: systemctl show -p ActiveEnterTimestamp cron
+      register: cron_status
+
+    - debug:
+        msg: "{{ cron_status.stdout }}"

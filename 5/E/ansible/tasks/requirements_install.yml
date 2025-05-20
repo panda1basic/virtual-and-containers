@@ -1,0 +1,14 @@
+- name: "Проверить наличие requirements.txt для {{ repo_item.name }}"
+  stat:
+    path: "/home/vagrant/projects/{{ repo_item.name }}/requirements.txt"
+  register: reqfile
+
+- name: "Установить Python-зависимости для {{ repo_item.name }}"
+  pip:
+    requirements: "/home/vagrant/projects/{{ repo_item.name }}/requirements.txt"
+  when: reqfile.stat.exists
+
+- name: "requirements.txt не найден в {{ repo_item.name }} — зависимости не устанавливаются"
+  debug:
+    msg: "Файл /home/vagrant/projects/{{ repo_item.name }}/requirements.txt не найден, зависимостей нет."
+  when: not reqfile.stat.exists

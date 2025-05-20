@@ -1,0 +1,27 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+VAGRANTFILE_API_VERSION = "2"
+ENV['VAGRANT_SERVER_URL'] = 'https://vagrant.elab.pro'
+
+Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
+  config.vm.box = "debian/bullseye64"
+
+  (1..2).each do |i|
+    config.vm.define "node#{i}" do |node|
+      node.vm.hostname = "node#{i}"
+      node.vm.synced_folder ".", "/vagrant", type: "rsync"
+      node.vm.network "private_network", ip: "192.168.56.1#{i+1}"
+
+      node.vm.provider "virtualbox" do |vb|
+        vb.memory = "2048"
+      end
+
+      node.vm.provision "ansible_local" do |ansible|
+        ansible.playbook       = "ansible/playbook.yml"
+        ansible.inventory_path = "ansible/inventory.ini"
+        ansible.compatibility_mode = "2.0"
+      end
+    end
+  end
+end
