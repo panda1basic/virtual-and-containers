@@ -1,0 +1,133 @@
+---
+- name: "Практика 5: Автоматизация конфигурирования ВМ с помощью Ansible Local"
+  hosts: localhost
+  become: true
+
+  vars:
+    nginx_version: "1.18.0-6.1+deb11u4"
+    service_port: "8081"
+    conf_path: "/etc/nginx/nginx.conf"
+    conf_backup_path: "/etc/nginx/nginx.conf.bak.{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}"
+    repos:
+      - { name: "spotifyd", repo: "https://github.com/Spotifyd/spotifyd.git" }
+      - { name: "Text-to-PPT-Generation-Streamlit-App", repo: "https://github.com/AIAnytime/Text-to-PPT-Generation-Streamlit-App.git" }
+      - { name: "fast-writer", repo: "https://github.com/Kirlovon/fast-writer.git" }
+
+  tasks:
+    - name: "Создать файл с временной меткой пользователя"
+      file:
+        path: /home/vagrant/timenuser
+        state: touch
+      become: false
+      
+    - name: "Добавить текущую дату и пользователя в timenuser"
+      shell: |
+        date > /home/vagrant/timenuser
+        whoami >> /home/vagrant/timenuser
+    #  lineinfile:
+    #    path: /home/vagrant/timenuser
+    #    line: "{{ lookup('pipe','date +\"%Y-%m-%d %H:%M:%S\"') }} {{ ansible_user_id }}"
+      become: false
+      
+    - name: "Добавить основной репозиторий Debian Bullseye"
+      apt_repository:
+        repo: "deb http://deb.debian.org/debian bullseye main"
+        state: present   
+        
+    - name: "Установить пакет nginx (версия {{ nginx_version }})"
+      apt:
+        name: "nginx={{ nginx_version }}"
+        state: present
+        update_cache: yes
+
+    - name: "Установить git"
+      apt:
+        name: git
+        state: present
+
+    - name: "Установить pip и venv для Python 3"
+      apt:
+        name:
+          - python3-pip
+          - python3-venv
+        state: present
+    
+    - name: "Установка ключа репозитория из URL"
+      apt_key:
+        url: https://dl.google.com/linux/linux_signing_key.pub
+        state: present
+        
+    - name: "Создание файла репозитория Chrome"
+      copy:
+        content: "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main"
+        dest: /etc/apt/sources.list.d/google-chrome.list
+        
+    - name: "Установить chrome"
+      apt:
+        name: google-chrome-stable
+        state: latest
+        update_cache: true
+        
+    - name: "Обновить порт в конфиге nginx.conf"
+      lineinfile:
+        path: /etc/nginx/nginx.conf
+        regexp: '^\s*listen\s+\d+;'
+        line: 'listen 8018;'
+        state: present
+        backup: yes
+
+    - name: "Сделать резервную копию конфига с меткой времени"
+      copy:
+        src: "{{ conf_path }}"
+        dest: "{{ conf_backup_path }}"
+        remote_src: yes
+        mode: '0644'
+
+    - name: "Деплой шаблона nginx.conf из Jinja2"
+      template:
+        src: templates/config.j2
+        dest: "{{ conf_path }}"
+        mode: '0644'
+
+    - name: "Скачать initrd с Debian-сервера"
+      get_url:
+        url: "https://ftp.debian.org/debian/dists/bullseye/main/installer-amd64/current/images/netboot/debian-installer/amd64/initrd.gz"
+        dest: /opt/initrd.gz
+        mode: '0644'
+        force: no
+
+    - name: "Добавить крон-задачу для резервного копирования"
+      cron:
+        name: "Backup data"
+        minute: "0"
+        hour: "3"
+        job: "/usr/bin/rsync -a /opt/data /backup/data"
+
+    - name: "Клонировать учебные репозитории"
+      git:
+        repo: "{{ item.repo }}"
+        dest: "/home/vagrant/projects/{{ item.name }}"
+        version: HEAD
+      loop: "{{ repos }}"
+
+    - name: "Установить зависимости из requirements.txt, если файл существует"
+      include_tasks: tasks/requirements_install.yml
+      loop: "{{ repos }}"
+      loop_control:
+        loop_var: repo_item
+
+    - name: "Перезапустить демон cron для применения изменений"
+      service:
+        name: cron
+        state: restarted
+
+    - name: "Показать время рестарта cron"
+      command: systemctl show -p ActiveEnterTimestamp cron
+      register: cron_status
+      
+    - name: "Запись времени последнего старта cron в файл"
+      lineinfile:
+        path: "/home/vagrant/timenuser"
+        line: "{{ cron_status.stdout | regex_replace('ActiveEnterTimestamp=', '') }}"
+    - debug:
+        msg: "{{ cron_status.stdout }}"
